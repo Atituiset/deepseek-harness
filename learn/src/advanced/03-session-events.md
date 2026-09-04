@@ -115,6 +115,41 @@ deriveMessages(): Message[] {
 
 `packages/core/session/src/invariant.ts` 是一个 companion 插件（`session-invariant`，挂在 `dsh-invariants` 服务旁）。它为每个 session 维护一份 trace（`SessionTrace`，`invariant.ts:23-31`：最近 seq、打开的 turn/step、下一个 turn/step 编号、未配对的 `pendingCalls`），对每个入库事件做关系校验：turn/step 必须配对开关、编号必须递增、`tool/call` 必须有 `tool/result` 配对。模型可见性不变量（「到达模型请求的东西必须能从日志重建」）也由这类守卫在运行中断言——它不是测试里的期望，而是产品代码里的活体检查。读这个文件是理解「账本纪律」最快的路径：每条断言对应一条你可以依赖的假设。
 
+## 深读一：`deriveEventMessage` 是被三处共享的一个纯函数
+
+`packages/core/session/src/surface.ts:90` 的 `deriveEventMessage(event): Message | null` 是整个事件溯源设计里**杠杆最大**的一个函数，但 30 行的代码很容易被一眼扫过。它是一个纯投影规则：「一个事件投影成什么模型消息（或 null）」。关键在于它被三处消费：
+
+1. `Session.deriveMessages()` 在内存里增量折叠它（活体路径，agent-loop 每次请求前调用）。
+2. 外部重建器（SDK、Python 运行时、transcript 工具）把**同一个函数**折叠在任意日志前缀的表面上，重建那个时点模型看到的确切消息序列。
+3. `Session.deriveEventMessage` 作为实例方法只是转调它——因为 browser-safe 的子路径导出（`@deepseek-ai/dsh-session/surface`）需要 Web 客户端也能用。
+
+三处折叠同一函数 = **「模型历史」在任何进程、任何时点、任何语言绑定里都严格同构**。如果投影规则散落在消费方，事件溯源就退化成「大家各自解读日志」的弱保证。文件头注释写明它必须远离 `node:` import 也是为了第 3 处——vite 打包会炸。
+
+函数体里两个非显然的规则值得背下来：
+
+- **`user/message` 原样透传，不做任何加框**（:96-105）。注释里明确警告「Do NOT re-add per-type framing」：想要 `<system-reminder>` 这类框架，由**生产者**烤进 content（`agent-instructions` 插件就这么做），不由投影层加。投影层加框 = 模型可见内容与日志内容分叉，重放保真就破了。
+- **空内容 `assistant/message` 投影为 null**（:107-111）：max-tokens 的 step 会落一条只为承载 usage 的空消息，它必须从模型历史里消失——否则 provider 收到一条零内容的 assistant 轮次直接 400。
+
+## 深读二：SurfaceManager 的两阶段折叠
+
+`surface.ts:414` 的 `SurfaceManager` 管理着「surface（模型可见的有序视图）」。它的设计动机是**时序攻击**：append 的校验（`validateNext`）发生在事件进日志**之前**，但折叠状态（`nodes`）的推进发生在进日志**之后**。拆开看：
+
+- `validateNext(event)`（:437-445）用「假设这个事件进日志」的预期 seq 做 `planSurfaceEvent` 规划——一个**不落盘的 try**。replace 操作在这里就要证明：声明的区间真实覆盖现有 surface 节点（`assertProvenance`，:213-243：`sourceEventSeqs` 必须稠密、无重复、全部早于当前 seq、且**完全包含**每个被遮蔽的节点）。校验失败 → 日志一个字节都不动，异常回到 append 调用者。
+- `_processDelta()`（:460-474）是真正的折叠：惰性推进，任何读口（`nodes`/`replaceGeneration`）先补齐未处理的事件再返回。`_pendingPlan` 记住刚校验过的候选事件，进日志后直接复用规划好的 plan，**不重复计算**。
+
+`replace` 的语义细节（`types.ts` 的 `SurfaceOp`）：`{ op: 'replace', start, end }` 替换的是 surface 的一个**前缀区间**——compaction 用它把旧历史换成一条摘要 `user/message`。被替换的旧事件**仍留在日志里**（append-only 不删事件），只是从 surface 视图消失。这带来一个你必须知道的分裂：
+
+- **模型**看不到被替换的历史（`deriveMessages` 走 surface）。
+- **人类 transcript 不能走 surface**——用户已经看过的对话不能因为压缩而消失。`surface.ts:58` 的 `isAppendSurfaceEvent` 就是为此存在：人读的 transcript 折叠 append 起源的事件，replacement 副本只对模型可见。**同一个日志，两种视图，按读者选择折叠规则**——这是事件溯源对 compaction 的完整回答。
+
+`replaceGeneration`（:448-451）是给缓存用的纪元号：`deriveMessages` 发现代数变了就整体重建增量缓存（`index.ts:795-799`），没变就只投影新节点。一次 replace = O(全量) 重投影，一次 append = O(1)——用换代的显式成本换平时投影的零成本。
+
+## 深读三：`fork` 与种子的校验哲学
+
+`SessionStore.fork`（`index.ts:1146`）和 `prepare` 的种子路径共享一条纪律：**种子不是绕过校验的后门，而是校验的另一个入口**。种子里每个事件走和 live append **同一套**不变量（无损 JSON、seq 连续、surface 规则）。为什么这么严？因为坏种子会潜伏：今天种下一个非法 replace 区间，明天 compaction 触发折叠时才炸——那时错误现场已经丢失。校验前移到入口，失败永远发生在能定位责任的位置。
+
+fork 拒绝边界落在「打开的 turn 中间」（`SessionForkErrorCode` 的 `OPEN_TURN`，:835-840）——你不能从一段还在进行的对话中间分叉：turn/start 没有 turn/end，重建方无法决定那段历史属于哪边。分叉的粒度是 turn，不是事件。**你设计自己的会话分叉时，先回答「哪些前缀是自洽的」——答案就是你的 fork 边界。**
+
 ## 动手练习
 
 **练习 1：把事件流打到控制台。** 写一个插件订阅 `session/event`，打印每个事件的 `seq` 和 `type`：
@@ -145,6 +180,10 @@ declare module '@deepseek-ai/dsh-session/types' {
 然后在 `agent/pre-step` 里 `session.append('demo/marker', { note: '...' })`（注意拿 session 的正确姿势是 `agent.session`）。跑一次并在 JSONL 里找到它。再想想：这个事件该标 `ignorable: true` 吗？判据是「一个不认识它的读者丢掉它之后，重建出的会话还完整吗」。
 
 **练习 3：验证 required-on-read。** 手工编辑一份会话 JSONL，把某个事件的 `type` 改成不存在的值（不加 `ignorable`），然后尝试 resume 这个会话，观察加载方如何拒绝。再把 `ignorable: true` 加到信封上重复实验，对比行为差异。
+
+**练习 4：手工折叠一次 surface。** 挑一份含多轮工具调用的会话日志，按 `deriveEventMessage` 的规则在纸上（或脚本里）折叠模型历史：只取 `user/message`、非空 `assistant/message`、`tool/result` 三类，按 seq 排序。然后把你的结果与 `session.deriveMessages` 的输出对比（可以通过一个临时插件打印）——如果完全一致，你就掌握了这个纯函数的语义。再进阶：找到日志里的 `request/header`，验证「模型看到的工具清单」与你的折叠之间只差一次投影。
+
+**练习 5：观察 replace 的双视图。** 跑一个足够长的会话触发 compaction（或在日志里找已有 `compaction/summary` 的会话），验证：被 replace 的旧事件**还在日志里**（按 seq 找得到原文）；surface 视图（模型历史）里它们消失了，取而代之的是一条摘要 `user/message`。然后回答：如果 UI 直接用 `deriveMessages` 渲染历史，用户会看到什么？——这就是为什么人类 transcript 必须折叠 `isAppendSurfaceEvent` 而不是整个 surface。
 
 ## 延伸阅读
 

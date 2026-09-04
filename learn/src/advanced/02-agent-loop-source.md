@@ -141,6 +141,55 @@ for await (const chunk of stream) {
 
 Config 面（:317-341）只有两个旋钮：`maxParallelToolCalls` 和预创建/恢复的 `agents` 列表（每项带 `id`、`provider`、`model`、可选 `sessionId`/`resumeSessionId`/`cwd`）。`validateConfiguredAgents`（:341-356）在任何 agent 启动前拒绝自相矛盾的配置（`sessionId` 与 `resumeSessionId` 互斥、精确身份不可重复）——「配置错误在加载期炸响」的仓库惯例。
 
+## 深读一：并发唤醒的闩锁协议
+
+这个类最难写对的不是 turn/step 本身，而是「任意时刻来一条唤醒消息，驱动不能丢、不能重、不能和取消打架」。它用一套**闩锁-重放**协议收束了这个问题，值得逐行拆：
+
+**入口分类（`send`，:122-129）。** 每条消息先回答一个问题：我现在能不能搭上当前活动？关键判断是 `wakingAfterAbort = wakeup && this.phase.kind !== 'idle' && this.phase.abort.signal.aborted`——唤醒输入不能加入一个**已被 abort 的活动**，所以它被重分类到 `next-turn`，开启新 turn。注意这个值在 `inbox.splice` **之前**捕获：splice 观察者可能重入 `cancel`，若之后再读相位就会分类错位。竞态正确性藏在「先快照、再行动」的纪律里。
+
+**三类相位，三种唤醒归宿（`wakeDriver`，:181-202）。**
+
+- `idle`：起驱动。`phase` 换成 `running`，`kick()` 包进 `ctx.agents.withInitiator(this, ...)`——initiator 边界让驱动内部所有代码都能用 `requireInitiator()` 找回「我是哪个 agent」（工具调度器就这么拿 session 的，见下）。
+- `running`（活的）：什么都不做，**不闩**。活驱动自己会认领队列——闩了反而要等它收尾才重放，多绕一圈。
+- `maintenance` 或 **已 abort 的驱动**：`wakeRequested = true`，闩住。等维护结束 / 驱动收尾的 `finally` 检查 `wakeRequested && this.inbox.hasPending` 再重放。注意例外：`reason?.kind === 'disposed'` 的 abort 不闩——**拆卸永远不等模型回合**，否则关进程会挂在一个正在生成的 turn 上。
+
+这套协议消灭了一个经典 bug：维护窗口期间来了新消息，旧写法要么丢消息、要么在维护中启动驱动造成两个驱动并发写 session。闩锁把「启动新驱动」这个决定推迟到唯一的收敛点。
+
+**`whenIdle()` 的循环等待（:204-209）。** 不是 `await this.activityDone` 一次完事，而是 `do { await (activity = this.activityDone) } while (activity !== this.activityDone)`——先取引用再 await，醒来看活动是否又被新驱动替换了。这是「等它真正闲下来」而不是「等某一次活动结束」，替换竞态下只有循环版本是对的。
+
+**每个 turn 换新的 AbortController（:334-337）。** turn 收尾时 `phase.abort = new AbortController()`，同时清掉 `wakeRequested`——旧 controller 上的闩随之作废，因为活驱动不需要闩（自己认领队列）。这是「旧闩不跨 turn」的不变量，漏掉它就会出现「明明有新工作却永远不启动」的死驱动。
+
+## 深读二：失败分类学与收容边界
+
+一个生产 agent loop 的失败处理是一个**分类学**问题。这个类把每类失败安排了明确的归宿：
+
+| 失败 | 捕获点 | 归宿 | 模型可见 |
+|---|---|---|---|
+| 流中断（abort 时有部分内容） | `step` 的 catch（:372-389） | `assembler.interruptedBlocks()` 拼出半截消息，append 带 `interrupted: true` 的 `assistant/message` | 是——半截思考保留在历史里 |
+| provider 带内失败（`finish: error`） | `step`（:391-408） | 先问 `agent/request-error` waterfall，没人接管就抛 `LlmError` | 否——变成 turn 结局 |
+| 其它一切异常 | `turn` 的 catch（:311-324） | `LlmError` 保留结构化 `failure`，别的异常扁平化为 `errorChain(error)` 文本 + `UNKNOWN` code，append `turn/end { kind: 'error' }` 后 rethrow | 否 |
+| 驱动边界 | `kick` 的 catch（:222-223） | **空 catch 块** | 否 |
+
+空 catch 为什么是对的：错误在抛到这里**之前**已经通过 `agent/error` 事件报告过、已经作为 `turn/end` 落盘过。驱动边界只做**收容**（不让 unhandled rejection 杀进程），不做处理。这就是「每个失败恰好有一个所有者」——传两遍会双记，传零遍会丢。
+
+两个容易忽略的细节：
+
+- **abort 分支不吞错误**（:312-315）：`signal.aborted` 时记 `{ kind: 'aborted' }` 后**继续 rethrow**，让上游的 await 链感知取消。取消不是错误，但它必须沿着异步链传播。
+- **max-tokens 粘性**（:294-299）：一旦某个 step 撞了输出上限，后续正常完成的 step **不能降级** turn 结局。`if (turnEnds === null || turnEnds.kind !== 'max-tokens') turnEnds = stepEnd`——没有这行，一个「先撞墙再正常收尾」的 turn 会被记成 completed，依赖 turn 结局做重试的策略就会误判。
+
+**给你的 agent 项目偷走的模式**：失败处理不是 try/catch 的层数问题，而是给每类失败指定「谁报告、谁落盘、谁收容」三个所有者。这个类 545 行里真正难写的就这两段，其余是流水线。
+
+## 深读三：请求对象的一生（防篡改链）
+
+`buildRequest` 构造的请求对象走了一条**全程防篡改**的路径，每一步都有明确动机：
+
+1. **种子冻结**（:468-477）：`deepFreeze(structuredClone(...))`——structuredClone 切断与持久化 header 的引用，deepFreeze 让下游拿到的就是不可变值。
+2. **瀑布提案**（:478-481）：`agent/request` 的监听者要改配置，只能返回**新对象**——旧对象冻着，改不动。
+3. **`markAgentLoopRequest`**（:535，实现在 `packages/llm/llm/src/call-config.ts:66`）：把**这个对象身份**记进一个进程级 `WeakSet`。为什么用身份标记而不是加字段？因为加字段会进模型请求、要进日志重建；而 `llm/stream` waterfall 的监听者只需要知道「这是 loop 组装的请求，不是别人直接调 `ctx.llm`」——一个进程内、不落盘、零序列化成本的判别。
+4. **header 落盘的三个 reason**（:507-518）：`initial | resume | change | series`。不是每次请求都 append——`headerEquals` 相等就不记。这正是「model-visible ⟺ logged」的精妙平衡：**能从日志重建**不等于**每次都记**，省掉的是 token 和日志噪音，保住的是可重建性。
+
+如果把这套东西移植到你自己的 agent：冻结 + 身份标记 + 按变化落盘，三件套缺一不可。冻结防插件误伤，标记给下游策略判别权，变化式落盘控制成本。
+
 ## 读码路线建议
 
 第一遍按调用顺序读：`index.ts` 的 `AgentLoop`（怎么造出来）→ `agent.ts` 的构造函数与 `send`（怎么喂输入）→ `kick`/`turn`/`preStep`/`step`/`buildRequest`（怎么跑一圈）→ `tool-calls.ts`（工具怎么调度）。第二遍带着问题读：取消怎么传播（追 `signal`）、错误怎么归一（追 `LlmError` 与 `errorChain`）、持久化顺序（追每个 `session.append` 的先后）。同目录还有 `runtime-context.ts`（运行时上下文投影）与 `constants.ts`（默认值），读完主文件再翻。
@@ -151,7 +200,11 @@ Config 面（:317-341）只有两个旋钮：`maxParallelToolCalls` 和预创建
 
 **练习 2：观察 pre-step 拒绝。** 写一个临时插件挂到示例组合上，在 `agent/pre-step` 里对包含特定关键词的消息返回 `{ kind: 'reject' }`（记得其它消息调 `next()`）。用 headless profile 发一条命中关键词的任务，在会话日志里确认出现了 `turn/start` → `turn/end { kind: 'blocked' }`，且没有任何 `step/start`。
 
-**练习 3：调并行度。** 在 cordis.yml 的 agent-loop 配置里把 `maxParallelToolCalls` 设为 1，让模型一次提出多个只读工具调用（比如「同时读这三个文件」），对比改之前日志里 `tool/call`/`tool/result` 的交错方式，验证串行模式下调用不再重叠。
+**练习 3：调并行度。** 在 cordis.yml 的 agent-loop 配置里把 `maxParallelToolCalls` 设为 1，让模型一次提出多个只读工具调用（比如「同时读这三个文件」），对比改之前日志里 `tool/call`/`tool/result` 的交错方式，验证串行模式下调用不再重叠——同时观察 `tool/call` 的 seq 依然全部先于任何 `tool/result`，不变量 A 不因配置改变。
+
+**练习 4：在日志里找闩锁。** 用 web profile 启动一个需要长工具调用的任务（比如让 agent 跑一个几秒的 bash 命令），趁它运行时再发一条 followup 消息。然后在日志里回答：第二条消息的 `user/message` 在哪个 seq？它在当前 turn 的 `step/end` 之后、下一个 `turn/start` 之前吗？——这就是「唤醒不闩、活驱动自己认领」在数据上的样子。再在**任务还没开始时**（maintenance 窗口极难撞上，可以改用「agent 空闲后立刻连发两条」替代）观察两条消息被同一个 turn 认领。
+
+**练习 5：给 abort 写断言。** 跑一个会触发多次工具调用的任务，中途 Ctrl-C。打开日志验证不变量 C：数一下 `tool/call` 与 `tool/result` 的数量是否相等；找出被合成结果覆盖的调用（`error.info.code` 为 `TOOL_ABORTED_BEFORE_DISPATCH`）；确认 `turn/end` 的 `reason.kind` 是 `aborted`。如果流中断时有半截输出，找到那条 `interrupted: true` 的 `assistant/message`——它的 `sourceEventSeqs` 指向哪些 chunk？
 
 ## 延伸阅读
 

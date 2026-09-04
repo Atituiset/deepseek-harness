@@ -117,6 +117,22 @@ tool/call（agent-loop 落盘，执行前）
 
 子调用与顶层调用的差异也被仔细设计过（`docs/tool-execution-pipeline.md:60`）：子调用带 parent token（`ToolExecution.parent`），日志里记 `tool/code-dispatch`，拒绝以「绑定拒绝」的形式返回给程序而不是吞掉，并且省略 `additionalContexts` 以保持 call/result 相邻。`Config`（:647）里的 `mode` 是部署默认值，agent preset 可以按 agent 覆盖；`run_code` 程序内重叠子调用的并发上限（`maxParallelSubCalls`，:666 的 Config 字段，默认 10）同样在注册表边界解析（:769-773）。
 
+## 深读：调度器的三条不变量（`tool-calls.ts` 精读）
+
+第 9 章给了 `executeToolCalls` 的导览；这里从写调度器的角度拆它为什么**难**、又靠什么收束。`packages/core/agent-loop/src/tool-calls.ts`（290 行）维护三条必须同时成立的不变量，其中两条互相拉扯：
+
+**不变量 A：dispatch 乱序完成，提交永远按模型顺序。** 并行池里 10 个调用哪个先回来听天由命，但 `tool/result` 事件必须按模型给的顺序落盘——因为模型历史是顺序敏感的（`tool/call` 与 `tool/result` 靠 `callId` 配对，乱序结果进历史会让下一轮模型请求的上下文错位）。实现是 `commitReady`（:147-161）：`committed` 只沿**连续**的前缀推进——`slots[committed]` 为空（前面的调用还没回来）就 break，哪怕后面 9 个都好了。这是一个经典的有界乱序缓冲：牺牲时延（队头阻塞），换顺序正确性。
+
+**不变量 B：策略链也按模型顺序走。** 更隐蔽的一层：`tools/pre-execute` 对每个调用的评估是**按顺序 await** 的（`startCall` 里 `prepare` 是顺序的，:170），只有 `dispatch`（真工具体）重叠。为什么？pre-execute 是权限/审批策略——策略插件往往带状态（「本 turn 已批准过 3 次」），乱序评估会让策略看到的事件序列与模型语义不一致。**策略同步、执行重叠**，这条分界线是这个调度器最值得抄的决策。
+
+**不变量 C：每个 `tool/call` 必有配对的 `tool/result`，即使被取消。** abort 时已开始的调用照常提交结果（等它们 drain，:221-231），没开始的调用补一条合成错误（`appendSkippedToolCall`，:250-260，code `TOOL_ABORTED_BEFORE_DISPATCH`）。为什么必须配对？回放器从日志重建模型历史时按 `callId` 配对——孤儿的 `tool/call` 会让重建方不知道该把什么喂给模型。**取消是常态路径**（用户打断、超时、steer），日志设计必须假设它高频发生。
+
+三条不变量的交叉点是最容易写错的地方：**abort 到达时 commitReady 停在半路怎么办？** 答案在 :238-243——先 `Promise.allSettled` 等所有 in-flight 落定、已提交的 accepted context 照常走 acceptor，然后给剩余调用补合成结果，**再**让 abort 沿 await 链上抛。中间任何一步提前 throw 都会破坏 C。
+
+另一个工程细节：**调度器自己的失败**（不是工具失败——是 `prepare`/`finalize` 抛错，:179-182 的 `schedulerFailure`）采用不同纪律：停止补充新调用、drain 已启动的、**拒绝并上抛，不为未启动的调用编造结果**（文件头注释第 8-10 行）。为什么区别对待？工具失败是**模型可见的领域事实**（模型要看到错误才能换路子），调度器失败是**基础设施 bug**——伪造结果等于把基建错误伪装成工具输出，掩盖真问题。错误分类决定日志策略，而不是反过来。
+
+`parseArguments`（:104-111）是最后一课：模型给的参数是**原始 JSON 字符串**，解析失败不抛错——把原文当 text 传下去，让 schema 校验层产出模型可读的错误。校验责任在管线后段（`tools/pre-execute` 之后的 registry 校验），不在调度器。每层只做自己那一份，是这个管线的性格。
+
 ## 动手练习
 
 **练习 1：写一个计时 around 插件。** 挂 `tools/execute`，给每次工具调用记录耗时：
@@ -142,6 +158,10 @@ export function apply(ctx: Context) {
 **练习 2：写一个守卫。** 用 `ctx.tools.guard()` 拒绝一切在工作目录之外写文件的工具调用（检查 `exec.name` 与 `exec.arguments`）。验证：被拒的调用产生了 `tool/result` 但 `isError: true`，且工具体从未执行（在你的工具里加个日志确认）。
 
 **练习 3：追一条结果重写。** 在 `tools/post-execute` 里给某个工具的结果追加一段 `additionalContexts`，然后在会话 JSONL 里找到它落地成的 `user/message`（它在哪个 seq？相对 `tool/result` 的位置如何？）。
+
+**练习 4：制造队头阻塞。** 写两个工具：`slow` 返回一个可控延迟的值（比如 5 秒），`fast` 立即返回。让模型一次调用 `fast` + `slow` + `fast`（提示词里点明「并行调用这三个」）。在日志里验证不变量 A：尽管中间的 `fast` 早于 `slow` 完成，它的 `tool/result` 仍排在 `slow` 的之后——`commitReady` 的连续前缀推进在数据上的样子。再把 `fast` 的注册改成独占模式（或写一个把 `fast` 归为 exclusive 的 `executionMode` 探针），观察它如何变成屏障：它前面的池先排空，它独占执行，后面的调用等它。
+
+**练习 5：打断并行池。** 重复练习 4，但在 `slow` 执行到一半时 Ctrl-C。从日志回答：三个调用的 `tool/call` 都在吗？`tool/result` 数量配对吗？后两个未启动的调用拿到的是不是 `TOOL_ABORTED_BEFORE_DISPATCH` 合成结果？这就是不变量 C 的高频路径。
 
 ## 延伸阅读
 
