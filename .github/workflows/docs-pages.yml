@@ -1,13 +1,9 @@
-# Publish the documentation website to GitHub Pages. This workflow is manual-only
-# (workflow_dispatch) and intentionally does not listen to pull_request or push:
-# the site presents a released snapshot, so publication is an explicit act from a
-# dsh-v* tag and must never appear as a PR check. `release:verify` rejects every
-# other ref, and the github-pages environment repeats that restriction as a
-# deployment tag policy with required reviewers.
-#
-# The build signal does not depend on this workflow. Every pull request builds
-# the production site through `check:ci:static`, and ci-master.yml builds it
-# again on master.
+# Publish the documentation website to GitHub Pages. Upstream runs this only
+# from a dsh-v* release tag (the site presents released snapshots); this fork
+# keeps the manual dispatch but publishes the tracked master tree, so the
+# release-tag gate step is dropped here. The build signal does not depend on
+# this workflow: every pull request builds the production site through
+# `check:ci:static`, and ci-master.yml builds it again on master.
 name: Deploy documentation
 
 on:
@@ -55,14 +51,6 @@ jobs:
 
       - name: Install (immutable)
         run: pnpm install --frozen-lockfile
-
-      # One definition of "released" for the site and the npm sequence: this
-      # rejects every ref that is not a dsh-v* tag naming the version this tree
-      # carries.
-      - name: Verify release version
-        env:
-          RELEASE_PUBLISH: 'true'
-        run: pnpm run release:verify --family dsh
 
       - name: Configure Pages
         id: pages

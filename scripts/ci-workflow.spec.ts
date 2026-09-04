@@ -755,7 +755,7 @@ describe('npm release workflows', () => {
 })
 
 describe('Documentation site publication', () => {
-  it('keeps Pages deployment dispatch-only from a dsh-v* tag', () => {
+  it('keeps Pages deployment dispatch-only from this fork\'s tracked master', () => {
     const workflow = loadWorkflow('.github/workflows/docs-pages.yml')
     const build = workflowJob(workflow, 'build')
     const deploy = workflowJob(workflow, 'deploy')
@@ -763,23 +763,18 @@ describe('Documentation site publication', () => {
       throw new TypeError('Documentation deployment must define on, env, and build steps')
     }
 
-    // The site presents a released snapshot: a merge must never publish it, and
+    // The site presents the tracked tree: a merge must never publish it, and
     // publication must never appear as a PR check.
     expect(Object.keys(workflow.on)).toEqual(['workflow_dispatch'])
 
-    // RELEASE_PUBLISH makes release:verify reject every ref that is not a dsh-v*
-    // tag naming this tree's version, so the site and the npm sequence share one
-    // definition of a released version.
+    // Upstream gates publication on a dsh-v* tag (the site presents released
+    // snapshots). This fork publishes its own master, so the release-tag gate
+    // step must stay absent while dispatch stays the only trigger.
     const steps = build.steps.filter(isRecord)
-    const verify = steps.find(step => step.name === 'Verify release version')
+    expect(steps.find(step => step.name === 'Verify release version')).toBeUndefined()
     const checkout = steps.find(
       step => typeof step.uses === 'string' && step.uses.startsWith('actions/checkout@'),
     )
-    expect(verify).toMatchObject({
-      env: { RELEASE_PUBLISH: 'true' },
-      run: 'pnpm run release:verify --family dsh',
-    })
-    // Complete history: the release scripts read tags.
     expect(checkout).toMatchObject({ with: { 'fetch-depth': 0 } })
 
     // Projected source links stay on the public repository's master. That
