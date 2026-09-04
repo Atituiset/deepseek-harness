@@ -129,6 +129,7 @@ const learn = mirroredPages(([
   ['advanced/06-llm-adapter.md', '13. 写一个 LLM 适配器', '13. Write an LLM adapter', 13],
   ['advanced/07-subagent-workflow.md', '14. 子代理与工作流', '14. Subagents and workflows', 14],
   ['advanced/08-testing.md', '15. 测试体系：单测、快照与真实 API', '15. The test pyramid: unit, snapshot, real API', 15],
+  ['advanced/09-cap-agent-formalism.md', '16. 一个 Agent 的完整形式：六件套与状态机', '16. The complete agent: six parts and a state machine', 16],
 ] as const).map(([file, rootLabel, enLabel, order]): MirroredPage => ({
   source: `learn/src/${file}`,
   route: `learn/${file}`,

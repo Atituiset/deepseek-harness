@@ -146,4 +146,4 @@ pnpm run test -- packages/core/agent-loop
 - 根 `AGENTS.md` 的 Commands 一节 — 全部命令与各自的用途边界。
 - `snapshots/AGENTS.md` — 集中快照语料的组织约定。
 - `packages/core/agent-loop/tests/contract-regressions.spec.ts` — 契约回归测试的范例。
-- 上一章 [第 14 章 子代理与工作流](./07-subagent-workflow.md)；回到 [第 8 章 架构总览](./01-architecture.md) 复习全图。
+- 上一章 [第 14 章 子代理与工作流](./07-subagent-workflow.md)；下一章 [第 16 章 一个 Agent 的完整形式](./09-cap-agent-formalism.md) 把全书收拢成状态机。
