@@ -372,10 +372,15 @@ describe('docsPages locale routes', () => {
       expect(counterpart, page.route).toBeDefined()
       expect(counterpart?.locale).toBe('en')
       if (page.contentLocale === 'zh-CN') {
-        expect(page.source).toMatch(/\.zh\.md$/)
-        expect(page.contentLocale).toBe('zh-CN')
-        expect(counterpart?.source).toBe(page.source.replace(/\.zh\.md$/, '.md'))
-        expect(counterpart?.contentLocale).toBe('en-US')
+        // A pair-named source must project its English sibling; a mirror-named
+        // one (learn/) intentionally shares the Chinese source in both trees.
+        if (page.source.endsWith('.zh.md')) {
+          expect(counterpart?.source).toBe(page.source.replace(/\.zh\.md$/, '.md'))
+          expect(counterpart?.contentLocale).toBe('en-US')
+        } else {
+          expect(counterpart?.source).toBe(page.source)
+          expect(counterpart?.contentLocale).toBe('zh-CN')
+        }
       } else {
         expect(counterpart?.source).toBe(page.source)
         expect(counterpart?.contentLocale).toBe(page.contentLocale)

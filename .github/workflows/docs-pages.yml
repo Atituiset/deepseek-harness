@@ -73,17 +73,6 @@ jobs:
           DOCS_BASE: ${{ steps.pages.outputs.base_path }}/
         run: pnpm run doc-sync
 
-      - name: Install mdbook
-        env:
-          MDBOOK_VERSION: '0.4.52'
-        run: |
-          curl -fsSL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-
-      - name: Build learning book into the site
-        run: mdbook build learn/ --dest-dir "$GITHUB_WORKSPACE/website/.dist/learn"
-
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:

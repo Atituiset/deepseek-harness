@@ -48,24 +48,28 @@ interface GuideModules {
   guide: 'zh-guide' | 'en-guide'
   /** Development module link. */
   develop: GuideModuleLink
+  /** Learning-book module link. */
+  learn: GuideModuleLink
   /** Reference module link. */
   reference: GuideModuleLink
 }
 
 /**
  * Guide-module facts keyed by locale, giving every module label and collection
- * one home shared by the navigation bar and the guide sidebar.
+ * one home shared between the navigation bar and the guide sidebar.
  */
 const guideModules = {
   root: {
     guide: localeCollections.root[0],
     develop: { label: '开发', collection: localeCollections.root[1] },
-    reference: { label: '参考', collection: localeCollections.root[2] },
+    learn: { label: '教程', collection: localeCollections.root[2] },
+    reference: { label: '参考', collection: localeCollections.root[3] },
   },
   en: {
     guide: localeCollections.en[0],
     develop: { label: 'Development', collection: localeCollections.en[1] },
-    reference: { label: 'Reference', collection: localeCollections.en[2] },
+    learn: { label: 'Learn', collection: localeCollections.en[2] },
+    reference: { label: 'Reference', collection: localeCollections.en[3] },
   },
 } satisfies Record<DocsLocale, GuideModules>
 
@@ -76,10 +80,10 @@ const guideModules = {
  * @returns Guide groups followed by top-level links to the other documentation modules.
  */
 function guideSidebar(locale: DocsLocale): DefaultTheme.SidebarItem[] {
-  const { guide, develop, reference } = guideModules[locale]
+  const { guide, develop, learn, reference } = guideModules[locale]
   return [
     ...sidebar(locale, guide),
-    ...[develop, reference].map(({ label, collection }) => ({
+    ...[develop, learn, reference].map(({ label, collection }) => ({
       text: label,
       link: landingLink(locale, collection),
     })),
@@ -94,10 +98,11 @@ function guideSidebar(locale: DocsLocale): DefaultTheme.SidebarItem[] {
  * @returns The module items for the locale's navigation bar.
  */
 function moduleNav(locale: DocsLocale): DefaultTheme.NavItem[] {
-  const { develop, reference } = guideModules[locale]
+  const { develop, learn, reference } = guideModules[locale]
   const routePrefix = locale === 'root' ? '' : '/en'
   return [
     { text: develop.label, link: landingLink(locale, develop.collection), activeMatch: `^${routePrefix}/develop/` },
+    { text: learn.label, link: landingLink(locale, learn.collection), activeMatch: `^${routePrefix}/learn/` },
     { text: reference.label, link: landingLink(locale, reference.collection), activeMatch: `^${routePrefix}/reference/` },
   ]
 }
@@ -324,6 +329,7 @@ export default withMermaid({
         sidebar: {
           '/guide/': guideSidebar('root'),
           '/develop/': sidebar('root', 'zh-develop'),
+          '/learn/': sidebar('root', 'zh-learn'),
           '/reference/': sidebar('root', 'zh-reference'),
         },
         outline: { label: '本页目录' },
@@ -350,6 +356,7 @@ export default withMermaid({
         sidebar: {
           '/en/guide/': guideSidebar('en'),
           '/en/develop/': sidebar('en', 'en-develop'),
+          '/en/learn/': sidebar('en', 'en-learn'),
           '/en/reference/': sidebar('en', 'en-reference'),
         },
         editLink: {

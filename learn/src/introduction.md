@@ -31,7 +31,10 @@
 
 ## 本地阅读
 
+教程发布在文档站的「教程」模块下。本地起一个热更新的预览（改动 `learn/src/` 里的章节会自动重新投影）：
+
 ```sh
-mdbook serve learn/   # 浏览器打开 http://localhost:3000
-mdbook build learn/   # 产出静态站点到 learn/book/
+pnpm docs:dev     # 浏览器打开 http://127.0.0.1:5173，进入 /learn/ 路径
 ```
+
+教程源码就是 `learn/src/` 下的这些 Markdown 文件；发布路径由 `website/docs.ts` 清单声明，改动章节内容只需编辑对应文件。

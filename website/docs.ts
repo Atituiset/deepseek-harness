@@ -14,9 +14,11 @@ export type DocsLocale = 'root' | 'en'
 export type DocsSidebar =
   | 'zh-guide'
   | 'zh-develop'
+  | 'zh-learn'
   | 'zh-reference'
   | 'en-guide'
   | 'en-develop'
+  | 'en-learn'
   | 'en-reference'
 
 /** A page projected into the VitePress source tree. */
@@ -103,6 +105,41 @@ function pairedPages(pages: PairedPage[]): DocsPage[] {
     }
   }))
 }
+
+/**
+ * The learning book: a Chinese-language Agent-development tutorial whose 15
+ * chapters tour the repository from first run through the agent-loop source.
+ * Projected through `mirroredPages` because no English counterpart exists;
+ * convert to `pairedPages` when one is written.
+ */
+const learn = mirroredPages(([
+  ['introduction.md', '前言与使用指南', 'Preface and how to read', 0],
+  ['beginner/01-tour.md', '1. 仓库导览：一切皆插件', '1. Repository tour: everything is a plugin', 1],
+  ['beginner/02-setup-run.md', '2. 环境准备：跑通你的第一个 Agent', '2. Setup: run your first agent', 2],
+  ['beginner/03-cordis-basics.md', '3. Cordis 基础：五个核心概念', '3. Cordis basics: five core concepts', 3],
+  ['beginner/04-anatomy-config.md', '4. 解剖一个真实 Agent 配置', '4. Anatomy of a real agent config', 4],
+  ['beginner/05-first-tool.md', '5. 写你的第一个工具', '5. Write your first tool', 5],
+  ['beginner/06-first-plugin.md', '6. 写你的第一个插件', '6. Write your first plugin', 6],
+  ['beginner/07-compose-overlay.md', '7. 组合与覆盖：打造自己的 Agent', '7. Compose and overlay your own agent', 7],
+  ['advanced/01-architecture.md', '8. 架构总览：事件溯源与扩展点', '8. Architecture: event sourcing and extension points', 8],
+  ['advanced/02-agent-loop-source.md', '9. Agent Loop 源码精读', '9. Reading the agent-loop source', 9],
+  ['advanced/03-session-events.md', '10. Session：事件溯源的真相之源', '10. Session: the event-sourced source of truth', 10],
+  ['advanced/04-capability-seam.md', '11. 能力接缝：Definition / Provider / Consumer', '11. Capability seams: Definition / Provider / Consumer', 11],
+  ['advanced/05-tool-pipeline.md', '12. 工具执行管线：从 tool/call 到 tool/result', '12. The tool execution pipeline', 12],
+  ['advanced/06-llm-adapter.md', '13. 写一个 LLM 适配器', '13. Write an LLM adapter', 13],
+  ['advanced/07-subagent-workflow.md', '14. 子代理与工作流', '14. Subagents and workflows', 14],
+  ['advanced/08-testing.md', '15. 测试体系：单测、快照与真实 API', '15. The test pyramid: unit, snapshot, real API', 15],
+] as const).map(([file, rootLabel, enLabel, order]): MirroredPage => ({
+  source: `learn/src/${file}`,
+  route: `learn/${file}`,
+  contentLocale: 'zh-CN',
+  label: { root: rootLabel, en: enLabel },
+  sidebar: { root: 'zh-learn', en: 'en-learn' },
+  section: { root: 'Agent 开发教程', en: 'Agent development tutorial' },
+  order,
+  // Chapter pages carry only H2/H3 sections a two-level outline reaches.
+  outline: [2, 3],
+})))
 
 const homeAndGuide = pairedPages([
   {
@@ -456,8 +493,8 @@ const reference = [
  * sequence, so a new collection lands in both surfaces together.
  */
 export const localeCollections = {
-  root: ['zh-guide', 'zh-develop', 'zh-reference'],
-  en: ['en-guide', 'en-develop', 'en-reference'],
+  root: ['zh-guide', 'zh-develop', 'zh-learn', 'zh-reference'],
+  en: ['en-guide', 'en-develop', 'en-learn', 'en-reference'],
 } as const satisfies Record<DocsLocale, readonly DocsSidebar[]>
 
 /** A sidebar group, matched to pages by `label`. */
@@ -478,6 +515,7 @@ const sections: Record<DocsLocale, readonly DocsSection[]> = {
   root: [
     { label: '入门' }, { label: 'SDK' }, { label: '自动化' }, { label: '集成' },
     { label: '基础' }, { label: '框架能力' }, { label: '实战' }, { label: 'Cordis 框架教程' },
+    { label: 'Agent 开发教程' },
     { label: '概念' }, { label: '生成参考' }, { label: 'Cordis API' }, { label: '开发手册' },
     { label: '总览' },
     { label: '内核与作用域', collapsed: true },
@@ -490,6 +528,7 @@ const sections: Record<DocsLocale, readonly DocsSection[]> = {
   en: [
     { label: 'Guide' }, { label: 'SDK' }, { label: 'Automation' }, { label: 'Integrations' },
     { label: 'Basics' }, { label: 'Framework' }, { label: 'Practice' }, { label: 'Cordis framework tutorial' },
+    { label: 'Agent development tutorial' },
     { label: 'Concepts' }, { label: 'Generated reference' }, { label: 'Cordis Core API' }, { label: 'Cookbook' },
     { label: 'Overview' },
     { label: 'Core and scopes', collapsed: true },
@@ -522,6 +561,7 @@ export function sectionSpec(locale: DocsLocale, label: string): DocsSection & { 
 export const docsPages: DocsPage[] = [
   ...homeAndGuide,
   ...develop,
+  ...learn,
   ...cordisTutorial,
   ...cordisPrimerReference,
   ...subsystemsReference,
