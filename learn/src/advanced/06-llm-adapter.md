@@ -11,10 +11,10 @@
 
 ## 接缝位置
 
-LLM 是第 11 章讲过的能力接缝：Definition 是 `packages/llm/llm` 的 `LlmRuntime`（`packages/llm/llm/src/index.ts:284`），你的适配器是 provider，agent-loop 是 consumer。适配器基类：
+LLM 是第 11 章讲过的能力接缝：Definition 是 `packages/llm/llm` 的 `LlmRuntime`（`packages/llm/llm/src/index.ts:326`），你的适配器是 provider，agent-loop 是 consumer。适配器基类：
 
 ```ts
-// packages/llm/llm/src/index.ts:232（LlmAdapter 的抽象方法）
+// packages/llm/llm/src/index.ts:274（LlmAdapter 的抽象方法）
 abstract stream(options: GenerateOptions): AsyncIterable<StreamChunk>
 ```
 
@@ -34,11 +34,11 @@ export function apply(ctx: Context, config: Config) {
 }
 ```
 
-注册纪律（`registerAdapter`，`packages/llm/llm/src/index.ts:338`）：一条 provider 路由一个 adapter，重复注册抛错；一次注册多条路由是全有或全无；注册是 effect，插件卸载即摘除，热替换成立。`options.provider` 选 adapter，`options.model` 是 provider 侧的模型 id——所以动态目录型 adapter 可以不重配生命周期就服务新模型。
+注册纪律（`registerAdapter`，`packages/llm/llm/src/index.ts:380`）：一条 provider 路由一个 adapter，重复注册抛错；一次注册多条路由是全有或全无；注册是 effect，插件卸载即摘除，热替换成立。`options.provider` 选 adapter，`options.model` 是 provider 侧的模型 id——所以动态目录型 adapter 可以不重配生命周期就服务新模型。
 
 ## StreamChunk 协议义务
 
-流的词汇在 `packages/llm/llm/src/types.ts:291-299`：
+流的词汇在 `packages/llm/llm/src/types.ts:364-372`：
 
 ```ts
 export type StreamChunk =
@@ -63,30 +63,32 @@ cookbook（`docs/cookbook/adding-an-llm-adapter.md:25-35`）把义务钉成了�
 
 消费侧不需要你关心，但值得知道：agent-loop 把每个 chunk 落盘为 `assistant/chunk` 并喂给 `BlockAssembler`（`packages/llm/llm/src/assembler.ts:36`）——它对「只有 delta 没有 block-start/end」的协议是宽容的，对已关闭 block 的迟到 delta 直接忽略（:32-34 注释）。你的适配器越守规矩，装配器越无感。
 
-## 参考布局：llm-deepseek 的五文件分工
+## 参考布局：llm-deepseek 的文件分工
 
 `packages/llm/llm-deepseek/src/` 演示了 cookbook 推荐的职责拆分（`docs/cookbook/adding-an-llm-adapter.md:37-39`）：
 
 | 文件 | 行数 | 职责 |
 |---|---|---|
-| `types.ts` | 152 | wire 类型：DeepSeek API 的请求/响应/SSE 载荷 |
-| `serialize.ts` | 187 | 请求序列化：harness 消息词汇 → wire 格式 |
+| `types.ts` | 183 | wire 类型：DeepSeek API 的请求/响应/SSE 载荷 |
+| `serialize.ts` | 430 | 请求序列化：harness 消息词汇 → wire 格式 |
 | `sse.ts` | 40 | 传输解析：SSE 帧解码 |
-| `translate.ts` | 185 | chunk 翻译：wire 事件 → `StreamChunk` |
-| `adapter.ts` | 346 | adapter 类：HTTP 调用、错误归一、`stream()` 主流程 |
-| `index.ts` | 276 | 插件入口：Config、凭证解析、注册 |
+| `translate.ts` | 210 | chunk 翻译：wire 事件 → `StreamChunk` |
+| `adapter.ts` | 707 | adapter 类：HTTP 调用、错误归一、`stream()` 主流程 |
+| `index.ts` | 498 | 插件入口：Config、凭证解析、注册 |
+| `files-api.ts` / `file-store.ts` / `upload-index.ts` / `file-id.ts` | — | 附件上传的文件面（DeepSeek 文件 API 的 client/存储/索引） |
+| `image-tokens.ts` / `request-pricing.ts` / `invariant.ts` | — | 图片 token 计量、请求计价、断言 |
 
-看 `adapter.ts` 里错误归一的做法（:139-144）：HTTP 状态映射到稳定 code——401/403 → `'AUTH'`，配额特征 → `QUOTA_EXCEEDED_CODE`，429 → `'RATE_LIMIT'`，上下文窗口特征 → `CONTEXT_WINDOW_EXCEEDED_CODE`。这些 code 是给策略层（重试、熔断、UI 提示）用的，所以必须稳定，不能把 provider 的原话直接冒泡上去。
+看 `adapter.ts` 里错误归一的做法（:333-338）：HTTP 状态映射到稳定 code——401/403 → `'AUTH'`，配额特征 → `QUOTA_EXCEEDED_CODE`，429 → `'RATE_LIMIT'`，上下文窗口特征 → `CONTEXT_WINDOW_EXCEEDED_CODE`。这些 code 是给策略层（重试、熔断、UI 提示）用的，所以必须稳定，不能把 provider 的原话直接冒泡上去。
 
 ## Config、密钥与重试
 
 三条纪律，全部有实证：
 
-**1. Config 经 schemastery 校验。** `export const Config: z<Config> = z.object({...})`（`llm-deepseek/src/index.ts:91`），cordis.yml 里的配置在加载期就被 schema 拦住，不存在「运行到一半发现配置错了」。
+**1. Config 经 schemastery 校验。** `export const Config: z<Config> = z.object({...})`（`llm-deepseek/src/index.ts:170` 附近），cordis.yml 里的配置在加载期就被 schema 拦住，不存在「运行到一半发现配置错了」。
 
-**2. 密钥走凭证接缝，绝不写字面 key。** llm-deepseek 的 Config 里没有 `apiKey` 字段，只有 `apiKeyEnv`（:64，schema 里带 `role('credential-ref')`，:92）；每次请求时经 `credentialRef` + 可选的 `ctx.credentials` 服务解析（:228-242），解析失败时报错并指出该把凭证存到哪。仓库里任何代码都不该出现字面 API key。
+**2. 密钥走凭证接缝，绝不写字面 key。** llm-deepseek 的 Config 里没有 `apiKey` 字段，只有 `apiKeyEnv`（:144，schema 里带 `role('credential-ref')`，:178）；每次请求时经 `credentialRef` + 可选的 `ctx.credentials` 服务解析（:367-381），解析失败时报错并指出该把凭证存到哪。仓库里任何代码都不该出现字面 API key。
 
-**3. `retryPolicy` 属于 provider 配置，由独立插件执行。** adapter 只声明重试策略（`llm-deepseek/src/index.ts:80` 的 `retryPolicy?: RetryPolicyConfig`），真正执行重试的是 `packages/llm/llm-retry`：它监听 `agent/request-error` waterfall（`llm-retry/src/index.ts:210`），按策略返回 `{ kind: 'retry' }` 让 agent-loop 的 step 循环再来一圈（回到第 9 章 `agent.ts:367-370`），并把调度事实落盘为 `llm/retry` 事件。把 `retryPolicy` 放在 llm-retry 自己的 Config 里会直接抛错（`llm-retry/src/index.ts:32-34`）——策略归 provider，执行归策略插件，这是故意的分层。
+**3. `retryPolicy` 属于 provider 配置，由独立插件执行。** adapter 只声明重试策略（`llm-deepseek/src/index.ts:163` 的 `retryPolicy?: RetryPolicyConfig`），真正执行重试的是 `packages/llm/llm-retry`：它监听 `agent/request-error` waterfall（`llm-retry/src/index.ts:243`），按策略返回 `{ kind: 'retry' }` 让 agent-loop 的 step 循环再来一圈（回到第 9 章 `agent.ts:388-404`），并把调度事实落盘为 `llm/retry` 事件。把 `retryPolicy` 放在 llm-retry 自己的 Config 里会直接抛错（`llm-retry/src/index.ts:33-34`）——策略归 provider，执行归策略插件，这是故意的分层。
 
 ## 模型元数据：resolveModel
 

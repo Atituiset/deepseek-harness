@@ -124,7 +124,7 @@ export function apply(ctx: Context) {
    pnpm dsh web --patch ./scratch-plugin/cordis.yml
    ```
 
-   打开 `http://127.0.0.1:3080`，对它说：「用 word_count 统计这段文字：……」。观察模型决定调用工具、传入参数、拿到结果的完整过程。
+   打开启动命令打印的 URL，对它说：「用 word_count 统计这段文字：……」。观察模型决定调用工具、传入参数、拿到结果的完整过程。
 
 4. **（可选）headless 验证。** 同一个 overlay 也可以加在 headless 上：
 

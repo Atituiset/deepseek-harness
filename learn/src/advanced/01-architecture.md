@@ -33,7 +33,7 @@ dsh --profile web --dump-config
 
 ## 核心包：各自的 `ctx` 钥匙
 
-`docs/architecture.md:39-51` 的表列出了核心包的分工，记住这张表就记住了系统的骨架：
+`docs/architecture.md:53-62` 的表列出了核心包的分工，记住这张表就记住了系统的骨架：
 
 | 包 | 拥有 | `ctx` 键 |
 |---|---|---|
@@ -48,7 +48,7 @@ dsh --profile web --dump-config
 
 ## 三类事件域：扩展点的第一决策
 
-`docs/architecture.md:53-61` 把事件分成三个域，并明说「选对事件域是大多数改动的第一个决策」：
+`docs/architecture.md:64-93` 把事件分成三个域，并明说「选对事件域是大多数改动的第一个决策」：
 
 - **Session events**：追加到日志、经 `session/event` 广播的持久事实。当这个事实必须在 reload 后存活时用它。
 - **Agent events**（`agent/*`）：携带活体 `Agent` 的事件——inbox、step、status、request、validation、continuation。用来观察或拦截进行中的工作。
@@ -68,7 +68,7 @@ dsh --profile web --dump-config
 
 ## 一个 turn 的完整流水线
 
-`docs/architecture.md:63-90` 给出了权威的事件序列。把它画成图：
+`docs/architecture.md:79-93` 给出了权威的事件序列。把它画成图：
 
 ```text
 turn/start                              ← 持久事件：turn 打开
@@ -93,15 +93,15 @@ turn/end { reason }                     ← 持久事件：结构化结束原因
 
 三个要点：
 
-1. **持久事件与活体扩展点交错出现**。`turn/*`、`step/*`、`user/message`、`assistant/*`、`tool/*` 是持久 session 事件；`agent/pre-step`、`agent/request`、`llm/stream`、`tools/*` 是活体扩展点（`docs/architecture.md:84`）。
+1. **持久事件与活体扩展点交错出现**。`turn/*`、`step/*`、`user/message`、`assistant/*`、`tool/*` 是持久 session 事件；`agent/pre-step`、`agent/request`、`llm/stream`、`tools/*` 是活体扩展点（`docs/architecture.md:95`）。
 2. **waterfall 必须调 `next()`**。`agent/pre-step`、`agent/request`、`llm/stream` 和三个 `tools/*` 事件都是 waterfall，监听者不调用 `next()` 就会短路整条链（语义见 `docs/cordis-primer.md` 的 waterfall 章节）。`agent/turn-stopping` 是 serial，没有 `next()`。
-3. **输入走同一个 inbox**。有些消息立即唤醒驱动（`followup`、`steer`），注入的上下文（`inject`）躺在 inbox 里等下一条唤醒消息（`docs/architecture.md:86`）。
+3. **输入走同一个 inbox**。有些消息立即唤醒驱动（`followup`、`steer`），注入的上下文（`inject`）躺在 inbox 里等下一条唤醒消息（`docs/architecture.md:80`）。
 
-`agent/pre-step` 决定模型看到什么：监听者可以改写被认领的消息，也可以 outright 拒绝；被拒绝或首轮被清空的认领仍然会关闭一个没消耗 step 的持久 turn——日志要记录这次尝试（`docs/architecture.md:88`）。
+`agent/pre-step` 决定模型看到什么：监听者可以改写被认领的消息，也可以 outright 拒绝；被拒绝或首轮被清空的认领仍然会关闭一个没消耗 step 的持久 turn——日志要记录这次尝试（`docs/architecture.md:98`）。enter 决策还可以携带 `startsRequestSeries` 开启一个新的模型消息系列，loop 会为此落一条 reason 为 `series` 的 `request/header` 事件。
 
 ## 会话日志与「model-visible ⟺ logged」
 
-`docs/architecture.md:92-96` 是全书最重要的一段：
+`docs/architecture.md:108-112` 是全书最重要的一段：
 
 > 会话日志是模型所见上下文的来源。`deriveMessages()` 从日志投影模型历史，原始 `assistant/chunk` 事件保留回放与 UI 保真。fork、resume、transcript、遥测、持久化全都从这条流派生。
 >
@@ -113,7 +113,7 @@ turn/end { reason }                     ← 持久事件：结构化结束原因
 
 ## 扩展点地图：新行为挂哪里
 
-`docs/architecture.md:104-129` 的表是日常开发最有用的一页，这里摘录最常用的几行（完整表共 19 行，建议打开原文对照）：
+`docs/architecture.md:119-142` 的表是日常开发最有用的一页，这里摘录最常用的几行（完整表共 22 行，建议打开原文对照）：
 
 | 目标 | 机制 |
 |---|---|
@@ -131,7 +131,7 @@ turn/end { reason }                     ← 持久事件：结构化结束原因
 
 ## 能力接缝：一次替换，全局生效
 
-`docs/architecture.md:98-102` 定义了贯穿全仓库的设计模式——**capability seam（能力接缝）**：一个可替换能力由三个角色组成：声明接口的 Service Definition、实现它的 Service Provider、使用它的 Consumer（通常是一个模型可见工具）。一个包可以身兼多角色，但只有一个角色不构成接缝。
+`docs/architecture.md:115-121` 定义了贯穿全仓库的设计模式——**capability seam（能力接缝）**：一个可替换能力由三个角色组成：声明接口的 Service Definition、实现它的 Service Provider、使用它的 Consumer（通常是一个模型可见工具）。一个包可以身兼多角色，但只有一个角色不构成接缝。
 
 接缝的威力在于「一次 provider 替换改变整个产品」：文件系统和子进程 provider 共享同一个执行世界，把它们指向远程沙箱，Bash、PTY、LSP 会一起跟着走，不需要 fork 任何 provider。第 11 章用 shell 和 llm 两条真实接缝把这个模式讲透。
 

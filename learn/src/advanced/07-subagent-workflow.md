@@ -22,35 +22,36 @@
 
 子代理是第 11 章接缝模式的教科书案例，三角色：
 
-- **Definition**：`packages/subagent/subagent`，`SubagentRuntime`（`packages/subagent/subagent/src/index.ts:171`），占有 `ctx.subagents`。核心操作是 `registerProvider(provider)`（:369，重名即抛错）、`start(name, request)`（one-shot 委派）、`startContinuable(spec)`（可持续对话的子代理）等。
+- **Definition**：`packages/subagent/subagent`，`SubagentRuntime`（`packages/subagent/subagent/src/index.ts:191`），占有 `ctx.subagents`。核心操作是 `registerProvider(provider)`（:510，重名即抛错）、`start(name, request)`（one-shot 委派）、`startContinuable(spec)`（可持续对话的子代理）等。
 - **Providers**：`dsh-subagent-spawn-in-process`（全新子 agent）、`dsh-subagent-fork-in-process`（继承父会话已完成前缀的分叉）、以及跨进程/跨产品的 `dsh-subagent-acp`、`dsh-subagent-claude-code`、`dsh-subagent-codex`、`dsh-subagent-dsh-sdk`。
 - **Consumers**：`dsh-tool-subagent`（模型可见的委派工具）、`dsh-tool-subagent-control`（`send_message`）、`dsh-tool-subagent-report`（子代理的 `report`）。
 
 **spawn 与 fork 的区别只在一件事上**：子代理看不看得到父会话的已完成历史——fork 看，spawn 不看（README 里 `inheritsParentContext` 条目；它是描述性的，不代表继承工具或权限）。深度控制由接缝统一拥有：`delegationDepth` 持久在 session header 里且单调递增，恢复的子代理不可能被重新数成顶层（README「Delegation depth」）。
 
-真实组合实例（`examples/headless-agent/cordis.yml:91-137`）：
+真实组合实例（`packages/bundle/base/cordis.patch.yml:334-376`，产品默认组合的一部分）：
 
 ```yaml
 - id: subagent
   name: '@deepseek-ai/dsh-subagent'
 - id: subagent-spawn-in-process
   name: '@deepseek-ai/dsh-subagent-spawn-in-process'
-  config: { providerName: spawn }
+  config:
+    providerName: spawn
 - id: subagent-fork-in-process
   name: '@deepseek-ai/dsh-subagent-fork-in-process'
-  config: { providerName: fork }
+  config:
+    providerName: fork
 - id: tool-subagent
   name: '@deepseek-ai/dsh-tool-subagent'
   config:
     provider: spawn
     toolName: subagent
     backgroundMode: continuable
-    maxDepth: 1
 ```
 
-注意 `tool-subagent` 这个 Consumer 被配置了两次（`:111` 与 `:126` 附近），分别以 `spawn` 和 `fork` provider 暴露成 `subagent` 和 `subagent_fork` 两个工具——**同一个 Consumer 包，接不同 provider，产出不同模型工具**。这是接缝「一次替换、全局生效」的正面证据。
+注意 `tool-subagent` 这个 Consumer 被配置了两次（两次 `id` 不同），分别以 `spawn` 和 `fork` provider 暴露成 `subagent` 和 `subagent_fork` 两个工具——**同一个 Consumer 包，接不同 provider，产出不同模型工具**。这是接缝「一次替换、全局生效」的正面证据。
 
-配置文件里的注释还记录了一个真实的组合决策（`cordis.yml` fork 工具段上方）：fork 保持 one-shot，因为 continuable 子代理的 `report` 工具与提示词节先于它要复用的历史存在；`run_in_background` 关闭，因为这个例子没挂任务服务。读 cordis.yml 时留意这类注释——它们是组合层面的架构决策记录。
+base 的 fork 行注释还记录了一个真实的组合决策：fork 保持 one-shot，因为 continuable 子代理的 `report` 工具与提示词节先于它要复用的历史存在；fork 也不选模型，让 provider/model 与父代理一致、继承的历史保持 KV Cache 复用资格。读 patch 文件时留意这类注释——它们是组合层面的架构决策记录，还链着对应的 Agent Note。
 
 ## one-shot 与 continuable：两种子代理生命周期
 
@@ -83,7 +84,7 @@ workflow 接缝（`packages/workflow/`）的结构同构：
 
 同组的 `dsh-tool-ralph`（`packages/workflow/tool-ralph`）是建在这两个原语之上的策略：一个 Ralph loop 是朝着不变目标运行的一串 fresh-agent 轮次，每轮是一个没有父对话种子的子会话，跨轮状态由共享工作区和一份有界结构化 handoff 承载（定义见 `docs/glossary.md` 的 Ralph 条目）。它的位置值得玩味：**不是** loop 模式、不是调度器、不是 goal——只是一个组合了 workflow 与 subagent 原语的模型可见工具。这又是「一切皆插件」：连「跑一个自治循环」这种事都没进 loop。
 
-headless 例子里 workflow 引擎经 spawn provider 扇出（`examples/headless-agent/cordis.yml:131` 附近）：
+base bundle 里 workflow 引擎经 spawn provider 扇出（`packages/bundle/base/cordis.patch.yml:376` 附近）：
 
 ```yaml
 - id: workflow-worker-thread
@@ -112,11 +113,11 @@ headless 例子里 workflow 引擎经 spawn provider 扇出（`examples/headless
 
 | 方法 | 语义 | 实现 |
 |---|---|---|
-| `followup(msg)` | 排队为新 turn，立即唤醒 | `runtime-types.ts:124` / `agent.ts:122` |
-| `steer(msg)` | 插到下一个 step 边界，立即生效 | `runtime-types.ts:133` / `agent.ts:126` |
-| `inject(msg)` | 注入上下文，不唤醒，等下一次认领 | `runtime-types.ts:143` / `agent.ts:130` |
-| `cancel(cause, options?)` | abort 当前活动，可保留 inbox | `agent.ts:134` |
-| `whenIdle()` | 等当前活动及闩住的唤醒全部排空 | `runtime-types.ts:93` / `agent.ts:195` |
+| `followup(msg)` | 排队为新 turn，立即唤醒 | `runtime-types.ts:130` / `agent.ts:131` |
+| `steer(msg)` | 插到下一个 step 边界，立即生效 | `runtime-types.ts:139` / `agent.ts:135` |
+| `inject(msg)` | 注入上下文，不唤醒，等下一次认领 | `runtime-types.ts:149` / `agent.ts:139` |
+| `cancel(cause, options?)` | abort 当前活动，可保留 inbox | `runtime-types.ts:91` / `agent.ts:143` |
+| `whenIdle()` | 等当前活动及闩住的唤醒全部排空 | `runtime-types.ts:99` / `agent.ts:204` |
 
 子代理的控制面就建在这五个原语上：`SubagentRuntime.followup` 就是给子 agent 的 inbox 投一条 followup，`interrupt` 是带权限校验的 `cancel({ keepInbox: true })`（`packages/subagent/subagent/README.md` 的服务 API 表）。
 
@@ -124,7 +125,7 @@ headless 例子里 workflow 引擎经 spawn provider 扇出（`examples/headless
 
 - 接口契约：`packages/core/agent/src/runtime-types.ts`（每个方法的 JSDoc 就是行为规范）。
 - 默认实现：`packages/core/agent-loop/src/agent.ts`（第 9 章已读）。
-- 服务面：`packages/subagent/subagent/src/index.ts` 的 `SubagentRuntime`（:171）。
+- 服务面：`packages/subagent/subagent/src/index.ts` 的 `SubagentRuntime`（:191）。
 - 委派 Consumer：`packages/subagent/tool-subagent/src/`——看模型参数如何变成 `SubagentStartRequest`。
 - workflow 引擎：`packages/workflow/workflow-worker-thread/src/`——看脚本隔离与子代理扇出的接线。
 
@@ -132,7 +133,7 @@ headless 例子里 workflow 引擎经 spawn provider 扇出（`examples/headless
 
 以下练习都不需要 API key（1、2 除外，它们用真实模型是为了观察事件；换成第 13 章的 echo adapter 也能做）。
 
-**练习 1：观察一次委派。** 用 headless profile 跑一个明显需要委派的任务，例如「spawn 一个子代理统计 learn/ 目录的行数，把结果报回来」。然后对比 `.sessions/` 下父会话与子会话的 JSONL：
+**练习 1：观察一次委派。** 用 headless profile 跑一个明显需要委派的任务，例如「spawn 一个子代理统计 learn/ 目录的行数，把结果报回来」。然后对比 harness home sessions 目录下父会话与子会话的 JSONL：
 
 - 子会话 header 里的 `parentSession` 与 `delegationDepth` 是什么？
 - 子会话第一条 `user/message` 与父会话里的 `tool/call`（`subagent` 工具）参数有什么关系？

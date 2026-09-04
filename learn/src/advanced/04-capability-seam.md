@@ -25,12 +25,12 @@
 
 shell 是仓库官方认定的 canonical 例子（glossary 原文点名）。全仓库的接缝清单见生成文档 `docs/capability-seams.md`——`fs`、`web`、`skill`、`compaction`、`code-runtime` 等都遵循同一形状。shell 的三个角色：
 
-- **Definition**：`packages/shell/shell`（包名 `dsh-shell`）。`ShellExecutor` 定义在 `packages/shell/shell/src/index.ts:65`：
+- **Definition**：`packages/shell/shell`（包名 `dsh-shell`）。`ShellExecutor` 定义在 `packages/shell/shell/src/index.ts:64`：
   ```ts
   export abstract class ShellExecutor extends Service {
-    abstract resolve(request: ShellExecRequest): ShellExecSpec   // :85
-    abstract run(spec: ShellExecSpec): Promise<ShellRunResult>   // :93
-    abstract start(spec: ShellExecSpec): ShellProcess            // :100
+    abstract resolve(request: ShellExecRequest): ShellExecSpec   // :84
+    abstract run(spec: ShellExecSpec): Promise<ShellRunResult>   // :92
+    abstract start(spec: ShellExecSpec): ShellProcess            // :99
   }
   ```
 - **Providers**：`packages/shell/bash-local`（本机 bash）、`packages/shell/bash-sandbox`（沙箱内 bash）；同组还有 pwsh 的两个对应物。
@@ -38,7 +38,7 @@ shell 是仓库官方认定的 canonical 例子（glossary 原文点名）。全
 
 注意 Consumer 不认识 local 还是 sandbox：它只面向 `ShellExecutor` 这个抽象。把 provider 从 `dsh-bash-local` 换成 `dsh-bash-sandbox`，`bash` 工具一行不改就跑进了沙箱。这就是第 8 章说的「一次 provider 替换改变整个产品」。
 
-Consumer 侧的接线就是一行 inject 声明（`packages/shell/tool-bash/src/index.ts:31`）：
+Consumer 侧的接线就是一行 inject 声明（`packages/shell/tool-bash/src/index.ts:30`）：
 
 ```ts
 export const inject = ['tools', 'shell', 'systemPrompt', 'shellEnv']
@@ -50,8 +50,8 @@ export const inject = ['tools', 'shell', 'systemPrompt', 'shellEnv']
 
 `ShellExecutor` 的 API 形状是这条仓库原则的模板（根 `AGENTS.md`：「Explicit > implicit at package boundaries」）。执行被拆成两步：
 
-1. `resolve(request: ShellExecRequest): ShellExecSpec`（:85）——把「用户想干什么」（命令、cwd、环境等）显式解析成「确切要执行什么」（补全后的可执行路径、最终 argv、生效环境）。
-2. `run(spec)` / `start(spec)`（:93、:100）——只接受已解析的 spec，里面**不允许**再藏着 `?? default` 之类的隐式补默认。
+1. `resolve(request: ShellExecRequest): ShellExecSpec`（:84）——把「用户想干什么」（命令、cwd、环境等）显式解析成「确切要执行什么」（补全后的可执行路径、最终 argv、生效环境）。
+2. `run(spec)` / `start(spec)`（:92、:99）——只接受已解析的 spec，里面**不允许**再藏着 `?? default` 之类的隐式补默认。
 
 默认值的填充被强制摆在一个显式的、可审查的步骤里，而不是散落在 `run()` 的深处。你写自己的接缝时照抄这个形状：请求类型进 `resolve`，spec 类型进执行方法。
 
@@ -59,9 +59,9 @@ export const inject = ['tools', 'shell', 'systemPrompt', 'shellEnv']
 
 llm 接缝展示「Definition 与 Consumer 同包」的变体（角色没有独立演化，就住在一起）：
 
-- **Definition**：`packages/llm/llm` 的 `LlmRuntime`（`packages/llm/llm/src/index.ts:284`），占有 `ctx.llm`，同时定义消息与流词汇（`Message`、`StreamChunk` 等在 `types.ts`）。适配器基类 `LlmAdapter` 在同文件（抽象方法 `stream` 在 :232）。
+- **Definition**：`packages/llm/llm` 的 `LlmRuntime`（`packages/llm/llm/src/index.ts:326`），占有 `ctx.llm`，同时定义消息与流词汇（`Message`、`StreamChunk` 等在 `types.ts`）。适配器基类 `LlmAdapter` 在同文件（抽象方法 `stream` 在 :274）。
 - **Providers**：`packages/llm/llm-deepseek`（直连 HTTP + SSE）、`packages/llm/llm-pi-ai`（包装现成 LLM 库）。第 13 章会精读前者。
-- **Consumer**：`LlmRuntime` 自己就是主要 consumer（`stream`/`prepareCall`），agent-loop 通过它发起请求；`llm/stream` waterfall（`index.ts:64`）把每次调用暴露给策略插件。
+- **Consumer**：`LlmRuntime` 自己就是主要 consumer（`stream`/`prepareCall`），agent-loop 通过它发起请求；`llm/stream` waterfall（`index.ts:67`）把每次调用暴露给策略插件。
 
 `LlmRuntime.registerAdapter`（:338）的注册纪律直接来自接缝的完整性要求：
 
@@ -69,9 +69,9 @@ llm 接缝展示「Definition 与 Consumer 同包」的变体（角色没有独�
 - **多路由注册全有或全无**——一个 adapter 注册三条路由，中途失败则整体回滚，不留半个注册。
 - **HMR 安全**：注册是 effect，返回 disposer（`AdapterRegistrationHandle`）；插件卸载时 adapter 随 effect 移除，热替换成立。
 
-agent-loop 侧的消费姿势（第 9 章见过）：`ctx.llm.prepareCall(config, signal)`（:779）把一次调用绑定到具体 adapter 注册，拿回带着精确默认值和 `retryPolicy` 的 `PreparedLlmCall`；不用 prepare 的直接 `ctx.llm.stream(request)`（:913）走注册解析加上 `llm/stream` waterfall。两条路最终都汇到 adapter 的 `stream()`。
+agent-loop 侧的消费姿势（第 9 章见过）：`ctx.llm.prepareCall(config, signal)`（:890）把一次调用绑定到具体 adapter 注册，拿回带着精确默认值和 `retryPolicy` 的 `PreparedLlmCall`；不用 prepare 的直接 `ctx.llm.stream(request)`（:1051）走注册解析加上 `llm/stream` waterfall。两条路最终都汇到 adapter 的 `stream()`。
 
-这条接缝还有一层值得单独看：`llm/stream` waterfall（`index.ts:64`）把**每一次**流式调用暴露成一个能力事件——重试、录制回放、路由都可以作为不 import loop 的普通插件挂在上面。录制回放（`packages/test-support/llm-replay`）支撑了第 15 章的免 key 快照，就是这条 waterfall 的消费者。接缝设计得好，测试基础设施都只是普通插件。
+这条接缝还有一层值得单独看：`llm/stream` waterfall（`index.ts:67`）把**每一次**流式调用暴露成一个能力事件——重试、录制回放、路由都可以作为不 import loop 的普通插件挂在上面。录制回放（`packages/test-support/llm-replay`）支撑了第 15 章的免 key 快照，就是这条 waterfall 的消费者。接缝设计得好，测试基础设施都只是普通插件。
 
 ## 两条接缝对照
 
@@ -116,7 +116,7 @@ agent-loop 侧的消费姿势（第 9 章见过）：`ctx.llm.prepareCall(config
 
 ## 注册即 effect：provider 的生与死
 
-所有接缝共享同一条生命周期纪律，看一遍 llm 的就够了（`packages/llm/llm/src/index.ts:338-354`）：
+所有接缝共享同一条生命周期纪律，看一遍 llm 的就够了（`packages/llm/llm/src/index.ts:380-400`）：
 
 - `registerAdapter` 返回的不只是 disposer，而是一个 `AdapterRegistrationHandle`——摘除是显式动作，但插件卸载时 effect 兜底自动摘除。
 - 重复路由在注册点抛错；多路由注册中途失败整体回滚，系统里不存在「半个 adapter」。

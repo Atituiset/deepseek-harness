@@ -43,18 +43,21 @@
 - `packages/llm/` — LLM 能力：抽象服务定义 + DeepSeek 适配器。
 - `packages/shell/`、`packages/fs/`、`packages/web/` 等 — 各个能力域，每个都按能力接缝组织（下文讲）。
 - `packages/bundle/` — 可安装的 bundle：把一组插件打包成一个配置层。`packages/bundle/base/cordis.patch.yml` 是每个 profile 的第一层。
-- `packages/examples/` — 演示 bundle，比如第 4 章要解剖的 `agent-spine-demo`。
+- `packages/examples/` — 剩余的演示包（`acp-demo`、`jsonrpc-demo`），现代产品组合已收进 `packages/bundle/`。
+- `packages/bundle/` — 产品的全部 bundle 层：`base`（每个 profile 的共享底座）、`headless`、`web-app`、`sdk-minimal` 等。`packages/bundle/base/cordis.patch.yml` 是每个 profile 的第一层，也是第 4 章的解剖对象。
 - `packages/boot/` — 应用启动的共享胶水。
 
-### `examples/` — 可运行的配置叶子
+### `packages/bundle/` — 可运行组合的权威来源
 
-`examples/` 下每个目录是一份可以直接跑的 `cordis.yml` 组合，覆盖在 `packages/examples` 的 bundle 之上：
+产品自己发布的组合就是最好的「配置样板间」，全在 `packages/bundle/` 下，每个 bundle 一份 `cordis.patch.yml`：
 
-- `examples/headless-agent/cordis.yml` — 第 4 章的解剖对象，165 行、注释齐全的完整编码 Agent。
-- `examples/jsonrpc-agent/minimal.cordis.yml` — 第 7 章的最小 Agent 蓝本。
-- `examples/web-schedule/`、`examples/mcp-memory/` — 第 7 章的 overlay 实战素材。
+- `packages/bundle/base/cordis.patch.yml` — 每个底座型 profile 的第一层（498 行、注释齐全）：LLM 接缝、工具、持久化、沙箱与审批、settings、credentials、遥测都在里面。第 4 章解剖它。
+- `packages/bundle/headless/cordis.patch.yml` — 一次性执行器层，叠在 base 上就是 `dsh --profile headless`。
+- `packages/bundle/sdk-minimal/cordis.patch.yml` — 第 7 章的最小 Agent 蓝本：不叠 base，自成完整组合。
 
-学习时把 `examples/` 当作「配置样板间」：它们展示了真实 Agent 是怎么由插件清单组装出来的。
+另外 `apps/cli/config/examples/` 下有一组小型 overlay 示例（`cordis`、`schedule`、`mcp-memory` 等），第 7 章的 overlay 实战素材。
+
+学习时把 `packages/bundle/` 当作「配置样板间」：它们展示了真实 Agent 是怎么由插件清单组装出来的。
 
 ### 其余目录
 
@@ -105,10 +108,10 @@
 |---|---|
 | 理解插件框架本身 | `docs/cordis-primer.md` → `vendor/cordis/src/` |
 | 跑一个现成 Agent | `pnpm dsh --profile headless "任务"`（第 2 章） |
-| 看一份完整 Agent 配置 | `examples/headless-agent/cordis.yml`（第 4 章） |
+| 看一份完整 Agent 配置 | `packages/bundle/base/cordis.patch.yml`（第 4 章） |
 | 加一个模型可调用的工具 | `docs/cookbook/adding-a-tool.md`（第 5 章） |
 | 加权限/拦截逻辑 | `docs/cookbook/extension-cookbook.md`（第 6 章） |
-| 组合出自己的 Agent | `examples/` 的 cordis.yml 文件（第 7 章） |
+| 组合出自己的 Agent | `packages/bundle/` 与 `apps/cli/config/examples/` 的 patch 文件（第 7 章） |
 | 读 Agent 主循环源码 | `packages/core/agent-loop/`（进阶篇第 9 章） |
 | 读会话/事件溯源 | `packages/core/session/`（进阶篇第 10 章） |
 | 换掉模型适配器 | `packages/llm/`（进阶篇第 13 章） |

@@ -110,7 +110,7 @@ pnpm run build   # Web 前端需要构建产物
 pnpm dsh web
 ```
 
-浏览器打开 `http://127.0.0.1:3080`。`web` 是 `--profile web` 的硬编码别名（见 `apps/cli/src/args.ts` 第 13 行注释）。第 5、6 章的练习会在 Web UI 里验证你写的工具和插件。
+启动命令会打印它的 URL（本机默认绑定 127.0.0.1）。`web` 是 `--profile web` 的硬编码别名（见 `apps/cli/src/args.ts` 头部注释）。第 5、6 章的练习会在 Web UI 里验证你写的工具和插件。
 
 ## 动手练习
 
